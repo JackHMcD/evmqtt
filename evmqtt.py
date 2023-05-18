@@ -164,30 +164,29 @@ class InputMonitor(threading.Thread):
         # Grab the input device to avoid keypresses also going to the
         # Linux console (and attempting to login)
         self.device.grab()
+
         while True:
             try:
-                self.device.read_loop()
-                break  # If grabbing is successful, exit the loop
-            except OSError:
-                log("Failed to grab device, waiting...")
-                time.sleep(1)  # Wait for 1 second and retry        
-
-        for event in self.device.read_loop():
-            if event.type == evdev.ecodes.EV_KEY:
-                k = evdev.categorize(event)
-                set_modifier(k.keycode, k.keystate)
-                if not is_modifier(k.keycode) and not is_ignore(k.keycode):
-                    if k.keystate == 1:
-                        msg = {
-                            "key": concat_multikeys(k.keycode) +
-                            get_modifiers(),
-                            "devicePath": self.device.path
-                        }
-                        msg_json = json.dumps(msg)
-                        self.mqttclient.publish(self.topic, msg_json)
-                        # log what we publish
-                        log("Device '%s', published message %s" %
-                            (self.device.path, msg_json))
+                for event in self.device.read_loop():
+                    if event.type == evdev.ecodes.EV_KEY:
+                        k = evdev.categorize(event)
+                        set_modifier(k.keycode, k.keystate)
+                        if not is_modifier(k.keycode) and not is_ignore(k.keycode):
+                            if k.keystate == 1:
+                                msg = {
+                                    "key": concat_multikeys(k.keycode) +
+                                    get_modifiers(),
+                                    "devicePath": self.device.path
+                                }
+                                msg_json = json.dumps(msg)
+                                self.mqttclient.publish(self.topic, msg_json)
+                                # log what we publish
+                                log("Device '%s', published message %s" %
+                                    (self.device.path, msg_json))
+            except OSError as e:
+                log("Exception occurred while reading device: %s" % e)
+                log("Waiting for the error to resolve...")
+                time.sleep(1)  # Wait for 1 second before retrying
 
 
 if __name__ == "__main__":

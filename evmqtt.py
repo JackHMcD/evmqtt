@@ -166,7 +166,7 @@ class InputMonitor(threading.Thread):
         self.device.grab()
         while True:
             try:
-                self.device.read_loop():
+                self.device.read_loop()
                 break  # If grabbing is successful, exit the loop
             except OSError:
                 log("Failed to grab device, waiting...")

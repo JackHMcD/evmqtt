@@ -1,3 +1,9 @@
+#!/usr/bin/env python3
+"""
+Linux input event to MQTT gateway
+https://github.com/odtgit/evmqtt
+"""
+
 import os
 import signal
 import threading
@@ -17,6 +23,7 @@ def log(s):
 
 
 class Watcher:
+
     def __init__(self):
         self.child = os.fork()
         if self.child == 0:
@@ -28,7 +35,9 @@ class Watcher:
         try:
             os.wait()
         except KeyboardInterrupt:
-            log('KeyboardInterrupt received')
+            # I put the capital B in KeyBoardInterrupt so I can
+            # tell when the Watcher gets the SIGINT
+            log('KeyBoardInterrupt received')
             self.kill()
         sys.exit()
 
@@ -38,8 +47,29 @@ class Watcher:
         except OSError:
             pass
 
+# The callback for when the client receives a CONNACK response from the server.
+
+
+def on_connect(client, userdata, flags, rc):
+    log("Connected with result code " + str(rc))
+    # Subscribing in on_connect() means that if we lose the connection and
+    # reconnect then subscriptions will be renewed.
+    client.subscribe("topic")
+
+
+def on_disconnect(client, userdata, rc):
+    log("Disconnected with result code " + str(rc))
+
+# The callback for when a PUBLISH message is received from the server.
+
+
+def on_message(msg):
+    msgpayload = str(msg.payload)
+    print(msg.topic + " " + msgpayload)
+
 
 class MQTTClient(threading.Thread):
+
     def __init__(self, clientid, mqttcfg):
         super(MQTTClient, self).__init__()
         serverip = mqttcfg["serverip"]
@@ -49,97 +79,11 @@ class MQTTClient(threading.Thread):
         log("MQTT connecting to %s:%u" % (serverip, port))
         self.mqttclient = mqtt.Client(clientid, protocol=mqtt.MQTTv31)
         self.mqttclient.username_pw_set(username, password)
-        self.mqttclient.on_connect = self.on_connect
-        self.mqttclient.on_disconnect = self.on_disconnect
-        self.mqttclient.on_message = self.on_message
+        self.mqttclient.on_connect = on_connect
+        self.mqttclient.on_disconnect = on_disconnect
+        self.mqttclient.on_message = on_message
         self.mqttclient.connect(serverip, port)
         self.mqttclient.loop_start()
-
-    def on_connect(self, client, userdata, flags, rc):
-        log("Connected with result code " + str(rc))
-        client.subscribe("topic")
-
-    def on_disconnect(self, client, userdata, rc):
-        log("Disconnected with result code " + str(rc))
-
-    def on_message(self, client, userdata, msg):
-        msgpayload = str(msg.payload)
-        print(msg.topic + " " + msgpayload)
-
-
-class InputMonitor(threading.Thread):
-    def __init__(self, mqttclient, device, topic):
-        super(InputMonitor, self).__init__()
-        self.mqttclient = mqttclient
-        self.device_path = device
-        self.topic = topic + '/state'  # state topic
-        self.config = topic + '/config'  # config topic for HA autodiscovery
-        self.config_data = {
-            "name": MQTTCFG["name"],
-            "state_topic": self.topic,
-            "icon": "mdi:code-json"
-        }
-        self.is_device_available = True
-        self.device = None
-        self.last_event_time = 0
-        self.reconnect_delay = 1
-
-    def publish_config(self):
-        msg_config = json.dumps(self.config_data)
-        self.mqttclient.publish(self.config, msg_config)
-        log("Sending configuration for autodiscovery to %s" % (self.config))
-
-    def connect_device(self):
-        try:
-            self.device = evdev.InputDevice(self.device_path)
-            self.device.grab()
-            self.is_device_available = True
-            self.publish_config()
-            log("Monitoring %s and sending to topic %s" % (self.device_path, self.topic))
-        except OSError as e:
-            log("Exception occurred while connecting to device: %s" % e)
-            self.is_device_available = False
-
-    def reconnect_device(self):
-        while not self.is_device_available:
-            sleep(self.reconnect_delay)
-            log("Waiting for the device to be available...")
-            try:
-                self.connect_device()
-            except Exception as e:
-                log("Exception occurred while reconnecting to device: %s" % e)
-
-    def run(self):
-        self.connect_device()
-        while True:
-            if self.is_device_available:
-                try:
-                    for event in self.device.read_loop():
-                        if event.type == evdev.ecodes.EV_KEY:
-                            self.handle_key_event(event)
-                except OSError as e:
-                    log("Exception occurred while reading device: %s" % e)
-                    self.is_device_available = False
-                    self.device.close()
-                    self.reconnect_device()
-            else:
-                self.reconnect_device()
-
-    def handle_key_event(self, event):
-        current_time = time()
-        if current_time - self.last_event_time >= 1:
-            self.last_event_time = current_time
-            k = evdev.categorize(event)
-            key_state[k.keycode] = k.keystate
-            if not is_modifier(k.keycode) and not is_ignore(k.keycode):
-                if k.keystate == 1:
-                    msg = {
-                        "key": concat_multikeys(k.keycode) + get_modifiers(),
-                        "devicePath": self.device_path
-                    }
-                    msg_json = json.dumps(msg)
-                    self.mqttclient.publish(self.topic, msg_json)
-                    log("Device '%s', published message %s" % (self.device_path, msg_json))
 
 
 key_state = {}
@@ -157,12 +101,13 @@ def get_modifiers():
     return "_" + "_".join(ret)
 
 
+# the number keys on the remote always set and unset numlock - this is
+# superfluous for my use-case
 modifiers = [
     "KEY_LEFTSHIFT",
     "KEY_RIGHTSHIFT",
     "KEY_LEFTCTRL",
-    "KEY_RIGHTCTRL"
-]
+    "KEY_RIGHTCTRL"]
 ignore = ["KEY_NUMLOCK"]
 
 
@@ -174,22 +119,84 @@ def set_modifier(keycode, keystate):
 
 def is_modifier(keycode):
     global modifiers
-    return keycode in modifiers
+    if keycode in modifiers:
+        return True
+    return False
 
 
 def is_ignore(keycode):
     global ignore
-    return keycode in ignore
+    if keycode in ignore:
+        return True
+    return False
 
 
 def concat_multikeys(keycode):
+    # Handles case on my remote where multiple keys returned,
+    # ie: mute returns KEY_MIN_INTERESTING and KEY_MUTE in a list
     ret = keycode
     if isinstance(ret, list):
         ret = "|".join(ret)
     return ret
 
 
+class InputMonitor(threading.Thread):
+
+    def __init__(self, mqttclient, device, topic):
+        super(InputMonitor, self).__init__()
+        self.mqttclient = mqttclient
+        self.device = evdev.InputDevice(device)
+        self.topic = topic + '/state'  # state topic
+        self.config = topic + '/config'  # config topic for HA autodiscovery
+        config = {
+                "name": MQTTCFG["name"],
+                "state_topic": self.topic,
+                "icon": "mdi:code-json"
+                }
+        msg_config = json.dumps(config)
+        self.mqttclient.publish(self.config, msg_config)
+        log("Sending configuration for autodiscovery to %s" % (self.config))
+        log("Monitoring %s and sending to topic %s" % (device, self.topic))
+
+    def run(self):
+        global key_state
+
+        # Grab the input device to avoid keypresses also going to the
+        # Linux console (and attempting to login)
+        self.device.grab()
+
+      while True:
+            try:
+                for event in self.device.read_loop():
+                    if event.type == evdev.ecodes.EV_KEY:
+                        k = evdev.categorize(event)
+                        set_modifier(k.keycode, k.keystate)
+                        if not is_modifier(k.keycode) and not is_ignore(k.keycode):
+                            if k.keystate == 1:
+                                msg = {
+                                    "key": concat_multikeys(k.keycode) +
+                                           get_modifiers(),
+                                    "devicePath": self.device.path
+                                }
+                                msg_json = json.dumps(msg)
+                                self.mqttclient.publish(self.topic, msg_json)
+                                # log what we publish
+                                log("Device '%s', published message %s" %
+                                    (self.device.path, msg_json))
+            except OSError:
+                # No device available, wait and retry
+                log("No input device available. Waiting for a device...")
+                time.sleep(5)
+                available_devices = [evdev.InputDevice(path) for path in evdev.list_devices()]
+                if any(device.path == self.device.path for device in available_devices):
+                    # Device became available
+                    log("Input device '%s' became available. Resuming monitoring." % self.device.path)
+                else:
+                    # Device still not available, continue waiting
+                    continue
+
 if __name__ == "__main__":
+
     try:
         Watcher()
 
@@ -199,9 +206,13 @@ if __name__ == "__main__":
             config_filename = "config.json"
 
         log("Loading config from '%s'" % config_filename)
-        MQTTCFG = json.load(open(config_filename))
+        MQTTCFG = json.load(
+            open(config_filename)
+        )
 
-        CLIENT = "evmqtt_{hostname}_{time}".format(hostname=hostname(), time=time())
+        CLIENT = "evmqtt_{hostname}_{time}".format(
+            hostname=hostname(), time=time()
+        )
 
         MQ = MQTTClient(CLIENT, MQTTCFG)
         MQ.start()
@@ -209,7 +220,8 @@ if __name__ == "__main__":
         topic = MQTTCFG["topic"]
         devices = MQTTCFG["devices"]
 
-        available_devices = [evdev.InputDevice(path) for path in evdev.list_devices()]
+        available_devices = [evdev.InputDevice(
+            path) for path in evdev.list_devices()]
         log("Found %s available devices:" % len(available_devices))
         for device in available_devices:
             log("Path:'%s', Name: '%s'" % (device.path, device.name))

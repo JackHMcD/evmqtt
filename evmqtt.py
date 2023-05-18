@@ -164,10 +164,9 @@ class InputMonitor(threading.Thread):
 
         # Grab the input device to avoid keypresses also going to the
         # Linux console (and attempting to login)
-
+        self.device.grab()
         while True:
             try:
-                self.device.grab()
                 for event in self.device.read_loop():
                     if event.type == evdev.ecodes.EV_KEY:
                         k = evdev.categorize(event)
@@ -188,7 +187,7 @@ class InputMonitor(threading.Thread):
                 log("Exception occurred while reading device: %s" % e)
                 log("Waiting for the error to resolve...")
                 sleep(1)  # Wait for 1 second before retrying
-
+                continue
 
 if __name__ == "__main__":
 

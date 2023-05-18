@@ -10,11 +10,12 @@ import threading
 import sys
 import datetime
 import json
-from time import time, sleep
+from time import time
 from platform import node as hostname
 from pathlib import Path
 import evdev
 import paho.mqtt.client as mqtt
+import pyudev
 
 
 def log(s):
@@ -47,9 +48,8 @@ class Watcher:
         except OSError:
             pass
 
+
 # The callback for when the client receives a CONNACK response from the server.
-
-
 def on_connect(client, userdata, flags, rc):
     log("Connected with result code " + str(rc))
     # Subscribing in on_connect() means that if we lose the connection and
@@ -60,9 +60,8 @@ def on_connect(client, userdata, flags, rc):
 def on_disconnect(client, userdata, rc):
     log("Disconnected with result code " + str(rc))
 
+
 # The callback for when a PUBLISH message is received from the server.
-
-
 def on_message(msg):
     msgpayload = str(msg.payload)
     print(msg.topic + " " + msgpayload)
@@ -145,58 +144,55 @@ class InputMonitor(threading.Thread):
     def __init__(self, mqttclient, device, topic):
         super(InputMonitor, self).__init__()
         self.mqttclient = mqttclient
-        self.device = evdev.InputDevice(device)
+        self.device_path = device
         self.topic = topic + '/state'  # state topic
         self.config = topic + '/config'  # config topic for HA autodiscovery
         config = {
-                "name": MQTTCFG["name"],
-                "state_topic": self.topic,
-                "icon": "mdi:code-json"
-                }
+            "name": MQTTCFG["name"],
+            "state_topic": self.topic,
+            "icon": "mdi:code-json"
+        }
         msg_config = json.dumps(config)
         self.mqttclient.publish(self.config, msg_config)
-        log("Sending configuration for autodiscovery to %s" % (self.config))
+        log("Sending configuration for autodiscovery to %s" % self.config)
         log("Monitoring %s and sending to topic %s" % (device, self.topic))
 
     def run(self):
         global key_state
 
+        context = pyudev.Context()
+        monitor = pyudev.Monitor.from_netlink(context)
+        monitor.filter_by(subsystem='input')
+
+        for device in iter(monitor.poll, None):
+            if device.action == 'add' and device.device_path == self.device_path:
+                dev = evdev.InputDevice(device.device_node)
+                self.process_device(dev)
+
+    def process_device(self, dev):
+        global key_state
+
         # Grab the input device to avoid keypresses also going to the
         # Linux console (and attempting to login)
-        self.device.grab()
+        dev.grab()
 
-      while True:
-            try:
-                for event in self.device.read_loop():
-                    if event.type == evdev.ecodes.EV_KEY:
-                        k = evdev.categorize(event)
-                        set_modifier(k.keycode, k.keystate)
-                        if not is_modifier(k.keycode) and not is_ignore(k.keycode):
-                            if k.keystate == 1:
-                                msg = {
-                                    "key": concat_multikeys(k.keycode) +
-                                           get_modifiers(),
-                                    "devicePath": self.device.path
-                                }
-                                msg_json = json.dumps(msg)
-                                self.mqttclient.publish(self.topic, msg_json)
-                                # log what we publish
-                                log("Device '%s', published message %s" %
-                                    (self.device.path, msg_json))
-            except OSError:
-                # No device available, wait and retry
-                log("No input device available. Waiting for a device...")
-                time.sleep(5)
-                available_devices = [evdev.InputDevice(path) for path in evdev.list_devices()]
-                if any(device.path == self.device.path for device in available_devices):
-                    # Device became available
-                    log("Input device '%s' became available. Resuming monitoring." % self.device.path)
-                else:
-                    # Device still not available, continue waiting
-                    continue
+        for event in dev.read_loop():
+            if event.type == evdev.ecodes.EV_KEY:
+                k = evdev.categorize(event)
+                set_modifier(k.keycode, k.keystate)
+                if not is_modifier(k.keycode) and not is_ignore(k.keycode):
+                    if k.keystate == 1:
+                        msg = {
+                            "key": concat_multikeys(k.keycode) + get_modifiers(),
+                            "devicePath": dev.path
+                        }
+                        msg_json = json.dumps(msg)
+                        self.mqttclient.publish(self.topic, msg_json)
+                        # log what we publish
+                        log("Device '%s', published message %s" % (dev.path, msg_json))
+
 
 if __name__ == "__main__":
-
     try:
         Watcher()
 
@@ -206,9 +202,7 @@ if __name__ == "__main__":
             config_filename = "config.json"
 
         log("Loading config from '%s'" % config_filename)
-        MQTTCFG = json.load(
-            open(config_filename)
-        )
+        MQTTCFG = json.load(open(config_filename))
 
         CLIENT = "evmqtt_{hostname}_{time}".format(
             hostname=hostname(), time=time()
@@ -218,15 +212,19 @@ if __name__ == "__main__":
         MQ.start()
 
         topic = MQTTCFG["topic"]
-        devices = MQTTCFG["devices"]
 
-        available_devices = [evdev.InputDevice(
-            path) for path in evdev.list_devices()]
+        context = pyudev.Context()
+        available_devices = [
+            device.device_node
+            for device in context.list_devices(subsystem='input')
+        ]
+
         log("Found %s available devices:" % len(available_devices))
         for device in available_devices:
             log("Path:'%s', Name: '%s'" % (device.path, device.name))
 
-        IM = [InputMonitor(MQ.mqttclient, device, topic) for device in devices]
+        devices = MQTTCFG["devices"]
+        IM = [InputMonitor(MQ.mqttclient, device, topic) for device in devices if device in available_devices]
 
         for monitor in IM:
             monitor.start()

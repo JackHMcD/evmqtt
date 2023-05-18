@@ -1,3 +1,4 @@
 paho-mqtt
 evdev
 pyudev
+python-utils

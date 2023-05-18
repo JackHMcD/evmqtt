@@ -187,7 +187,8 @@ class InputMonitor(threading.Thread):
                 log("Exception occurred while reading device: %s" % e)
                 log("Waiting for the error to resolve...")
                 sleep(1)  # Wait for 1 second before retrying
-                continue
+                self.device = evdev.InputDevice(self.device.path)  # Reinitialize the input device
+                self.device.grab()  # Re-grab the input device
 
 if __name__ == "__main__":
 

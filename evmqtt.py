@@ -163,9 +163,10 @@ class InputMonitor(threading.Thread):
 
         # Grab the input device to avoid keypresses also going to the
         # Linux console (and attempting to login)
+        self.device.grab()
         while True:
             try:
-                self.device.grab()
+                self.device.read_loop():
                 break  # If grabbing is successful, exit the loop
             except OSError:
                 log("Failed to grab device, waiting...")

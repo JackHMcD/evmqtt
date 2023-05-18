@@ -11,6 +11,7 @@ import sys
 import datetime
 import json
 from time import time
+from time import sleep
 from platform import node as hostname
 from pathlib import Path
 import evdev
@@ -186,7 +187,7 @@ class InputMonitor(threading.Thread):
             except OSError as e:
                 log("Exception occurred while reading device: %s" % e)
                 log("Waiting for the error to resolve...")
-                time.sleep(1)  # Wait for 1 second before retrying
+                sleep(1)  # Wait for 1 second before retrying
 
 
 if __name__ == "__main__":

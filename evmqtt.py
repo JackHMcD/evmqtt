@@ -164,8 +164,11 @@ class InputMonitor(threading.Thread):
         # Grab the input device to avoid keypresses also going to the
         # Linux console (and attempting to login)
         self.device.grab()
-
+        
+        
+    try:
         for event in self.device.read_loop():
+    except:
             if event.type == evdev.ecodes.EV_KEY:
                 k = evdev.categorize(event)
                 set_modifier(k.keycode, k.keystate)
@@ -181,7 +184,9 @@ class InputMonitor(threading.Thread):
                         # log what we publish
                         log("Device '%s', published message %s" %
                             (self.device.path, msg_json))
-
+    else:
+        delay:1
+        log("Exception r: %s" % er)
 
 if __name__ == "__main__":
 

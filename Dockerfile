@@ -1,6 +1,6 @@
 FROM python:3.10-alpine as builder
 
-RUN apk add linux-headers gcc libc-dev libudev-dev
+RUN apk add linux-headers gcc libc-dev eudev-dev
 COPY requirements.txt /
 WORKDIR /install
 RUN pip install --prefix="/install" -r /requirements.txt 
